@@ -1,47 +1,92 @@
-name: Build APK
+name: Build APK and AAB
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch: # allows manual trigger
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: "URL of uploaded ZIP file"
+        required: true
+        type: string
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
+
+      - name: Download uploaded ZIP
+        run: |
+          curl -L "${{ github.event.inputs.zip_url }}" -o app.zip
+          mkdir workspace && unzip app.zip -d workspace
 
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: 18
 
       - name: Install dependencies
         run: npm install
 
-      - name: Build PWA
-        run: npm run build
-
-      - name: Install Capacitor CLI
-        run: npm install @capacitor/core @capacitor/cli
-
-      - name: Copy to Capacitor
-        run: npx cap copy android
-
-      - name: Set up JDK
+      - name: Set up Java
         uses: actions/setup-java@v3
         with:
-          java-version: '11'
           distribution: 'temurin'
+          java-version: '17'
 
-      - name: Build APK
-        run: cd android && ./gradlew assembleRelease
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v2
 
-      - name: Upload APK artifact
+      - name: Handle keystore
+        id: keystore
+        run: |
+          cd workspace
+          # Check if user provided a keystore
+          if ls *.keystore 1> /dev/null 2>&1; then
+            echo "Using existing keystore"
+            echo "KEYSTORE_FILE=$(ls *.keystore | head -n 1)" >> $GITHUB_ENV
+            echo "STOREPASS=android" >> $GITHUB_ENV
+            echo "KEYPASS=android" >> $GITHUB_ENV
+            echo "ALIAS=mykey" >> $GITHUB_ENV
+          else
+            echo "No keystore found, generating new one"
+            keytool -genkey -v -keystore build-key.keystore -alias mykey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Build,O=Company,C=US"
+            echo "KEYSTORE_FILE=build-key.keystore" >> $GITHUB_ENV
+            echo "STOREPASS=android" >> $GITHUB_ENV
+            echo "KEYPASS=android" >> $GITHUB_ENV
+            echo "ALIAS=mykey" >> $GITHUB_ENV
+          fi
+
+      - name: Capacitor Android build
+        run: |
+          cd workspace
+          npx cap add android || true
+          npx cap sync android
+          cd android
+          ./gradlew assembleRelease bundleRelease
+
+      - name: Sign APK
+        run: |
+          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+            -keystore workspace/${{ env.KEYSTORE_FILE }} \
+            -storepass ${{ env.STOREPASS }} -keypass ${{ env.KEYPASS }} \
+            workspace/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            ${{ env.ALIAS }}
+
+      - name: Align APK
+        run: |
+          zipalign -v 4 workspace/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            workspace/android/app/build/outputs/apk/release/app-release-signed.apk
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: app-release
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: android-build
+          path: |
+            workspace/${{ env.KEYSTORE_FILE }}
+            workspace/android/app/build/outputs/apk/release/app-release-signed.apk
+            workspace/android/app/build/outputs/bundle/release/app-release.aab
