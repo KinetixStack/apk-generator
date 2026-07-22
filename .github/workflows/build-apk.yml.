@@ -38,12 +38,28 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v2
 
-      - name: Generate unique keystore
+      - name: Handle keystore
+        id: keystore
         run: |
-          keytool -genkey -v -keystore build-key.keystore -alias alias_${{ github.run_id }} \
-          -keyalg RSA -keysize 2048 -validity 10000 \
-          -storepass pass${{ github.run_id }} -keypass pass${{ github.run_id }} \
-          -dname "CN=Build,O=Company,C=US"
+          cd workspace
+          # Check if user provided a keystore
+          if ls *.keystore 1> /dev/null 2>&1; then
+            echo "Using existing keystore"
+            echo "KEYSTORE_FILE=$(ls *.keystore | head -n 1)" >> $GITHUB_ENV
+            echo "STOREPASS=android" >> $GITHUB_ENV
+            echo "KEYPASS=android" >> $GITHUB_ENV
+            echo "ALIAS=mykey" >> $GITHUB_ENV
+          else
+            echo "No keystore found, generating new one"
+            keytool -genkey -v -keystore build-key.keystore -alias mykey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Build,O=Company,C=US"
+            echo "KEYSTORE_FILE=build-key.keystore" >> $GITHUB_ENV
+            echo "STOREPASS=android" >> $GITHUB_ENV
+            echo "KEYPASS=android" >> $GITHUB_ENV
+            echo "ALIAS=mykey" >> $GITHUB_ENV
+          fi
 
       - name: Capacitor Android build
         run: |
@@ -56,19 +72,21 @@ jobs:
       - name: Sign APK
         run: |
           jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
-          -keystore ../build-key.keystore -storepass pass${{ github.run_id }} -keypass pass${{ github.run_id }} \
-          app/build/outputs/apk/release/app-release-unsigned.apk alias_${{ github.run_id }}
+            -keystore workspace/${{ env.KEYSTORE_FILE }} \
+            -storepass ${{ env.STOREPASS }} -keypass ${{ env.KEYPASS }} \
+            workspace/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            ${{ env.ALIAS }}
 
       - name: Align APK
         run: |
-          zipalign -v 4 app/build/outputs/apk/release/app-release-unsigned.apk \
-          app/build/outputs/apk/release/app-release-signed.apk
+          zipalign -v 4 workspace/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            workspace/android/app/build/outputs/apk/release/app-release-signed.apk
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
           name: android-build
           path: |
-            build-key.keystore
+            workspace/${{ env.KEYSTORE_FILE }}
             workspace/android/app/build/outputs/apk/release/app-release-signed.apk
             workspace/android/app/build/outputs/bundle/release/app-release.aab
