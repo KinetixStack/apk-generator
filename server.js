@@ -66,6 +66,72 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+import express from "express";
+import fetch from "node-fetch";
+
+const app = express();
+
+// Existing /upload route here...
+
+// 1. Get latest workflow run status
+app.get("/status", async (req, res) => {
+  try {
+    const response = await fetch(
+      "https://api.github.com/repos/KinetixStack/apk-generator/actions/runs",
+      {
+        headers: {
+          Authorization: `token ${process.env.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json"
+        }
+      }
+    );
+    const data = await response.json();
+
+    // Find the most recent run of your workflow
+    const run = data.workflow_runs.find(r => r.name === "Build APK and AAB");
+
+    if (!run) {
+      return res.json({ status: "not_found" });
+    }
+
+    res.json({
+      id: run.id,
+      status: run.status,       // queued, in_progress, completed
+      conclusion: run.conclusion // success, failure, cancelled
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch status" });
+  }
+});
+
+// 2. Get artifacts for the latest run
+app.get("/artifacts", async (req, res) => {
+  try {
+    const response = await fetch(
+      "https://api.github.com/repos/KinetixStack/apk-generator/actions/artifacts",
+      {
+        headers: {
+          Authorization: `token ${process.env.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json"
+        }
+      }
+    );
+    const data = await response.json();
+
+    // Return artifact names + download URLs
+    const artifacts = data.artifacts.map(a => ({
+      id: a.id,
+      name: a.name,
+      url: a.archive_download_url
+    }));
+
+    res.json({ artifacts });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch artifacts" });
+  }
+});
 
 const path = require("path");
 const fs = require("fs");
