@@ -90,3 +90,4 @@ jobs:
             workspace/${{ env.KEYSTORE_FILE }}
             workspace/android/app/build/outputs/apk/release/app-release-signed.apk
             workspace/android/app/build/outputs/bundle/release/app-release.aab
+            
